@@ -4,7 +4,7 @@
   entry: terraform_fmt.sh
   language: script
   files: (\.tf|\.tfvars)$
-  exclude: (\.terraform|\.terragrunt\/.*$
+  exclude: (\.terraform|\.terragrunt)\/.*$
 
 - id: terraform_docs
   name: Terraform docs
@@ -14,7 +14,7 @@
   args: [--args=--with-aggregate-type-defaults]
   language: script
   files: (\.tf)$
-  exclude: (\.terraform|\.terragrunt\/.*$
+  exclude: (\.terraform|\.terragrunt)\/.*$
 
 - id: terraform_docs_without_aggregate_type_defaults
   name: Terraform docs (without aggregate type defaults)
@@ -23,7 +23,7 @@
   entry: terraform_docs.sh
   language: script
   files: (\.tf)$
-  exclude: (\.terraform|\.terragrunt\/.*$
+  exclude: (\.terraform|\.terragrunt)\/.*$
 
 - id: terraform_docs_replace
   name: Terraform docs (overwrite README.md)
@@ -32,7 +32,7 @@
   entry: terraform_docs_replace
   language: python
   files: (\.tf)$
-  exclude: (\.terraform|\.terragrunt\/.*$
+  exclude: (\.terraform|\.terragrunt)\/.*$
 
 - id: terraform_validate_no_variables
   name: Terraform validate without variables
@@ -40,7 +40,7 @@
   entry: terraform_validate_no_variables.sh
   language: script
   files: (\.tf|\.tfvars)$
-  exclude: (\.terraform|\.terragrunt\/.*$
+  exclude: (\.terraform|\.terragrunt)\/.*$
 
 - id: terraform_validate_with_variables
   name: Terraform validate with variables
@@ -48,4 +48,4 @@
   entry: terraform_validate_with_variables.sh
   language: script
   files: (\.tf|\.tfvars)$
-  exclude: (\.terraform|\.terragrunt\/.*$
+  exclude: (\.terraform|\.terragrunt)\/.*$

@@ -21,7 +21,7 @@ Step into the repository you want to have the pre-commit hooks installed and run
 ```bash
 cat <<EOF > .pre-commit-config.yaml
 - repo: git://github.com/scenarex/pre-commit-hooks/tree/scenarex
-  rev: sc-v1.10.0
+  rev: v1.10.0-sc1
   hooks:
     - id: terraform_fmt
     - id: terraform_docs
