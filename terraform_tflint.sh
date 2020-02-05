@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 set -e
 
 main() {
@@ -25,257 +24,25 @@ main() {
     esac
   done
 
-  local hack_terraform_docs
-  hack_terraform_docs=$(terraform version | head -1 | grep -c 0.12)
-
-  if [[ ! $(command -v terraform-docs) ]]; then
-    echo "ERROR: terraform-docs is required by terraform_docs pre-commit hook but is not installed or in the system's PATH."
-    exit 1
-  fi
-
-  local is_old_terraform_docs
-  is_old_terraform_docs=$(terraform-docs version | grep -o "v0.[1-7]" | tail -1)
-
-  if [[ -z "$is_old_terraform_docs" ]]; then # Using terraform-docs 0.8+ (preferred)
-
-    terraform_docs "0" "$args" "$files"
-
-  elif [[ "$hack_terraform_docs" == "1" ]]; then # Using awk script because terraform-docs is older than 0.8 and terraform 0.12 is used
-
-    if [[ ! $(command -v awk) ]]; then
-      echo "ERROR: awk is required for terraform-docs hack to work with Terraform 0.12."
-      exit 1
-    fi
-
-    tmp_file_awk=$(mktemp "${TMPDIR:-/tmp}/terraform-docs-XXXXXXXXXX")
-    terraform_docs_awk "$tmp_file_awk"
-    terraform_docs "$tmp_file_awk" "$args" "$files"
-    rm -f "$tmp_file_awk"
-
-  else # Using terraform 0.11 and no awk script is needed for that
-
-    terraform_docs "0" "$args" "$files"
-
-  fi
+  tflint_ "$args" "$files"
 }
 
-terraform_docs() {
-  readonly terraform_docs_awk_file="$1"
-  readonly args="$2"
-  readonly files="$3"
-
-  declare -a paths
-  declare -a tfvars_files
-
-  index=0
-
+tflint_() {
   for file_with_path in $files; do
     file_with_path="${file_with_path// /__REPLACED__SPACE__}"
 
     paths[index]=$(dirname "$file_with_path")
 
-    if [[ "$file_with_path" == *".tfvars" ]]; then
-      tfvars_files+=("$file_with_path")
-    fi
-
-    ((index += 1))
+    let "index+=1"
   done
-
-  readonly tmp_file=$(mktemp)
-  readonly text_file="README.md"
 
   for path_uniq in $(echo "${paths[*]}" | tr ' ' '\n' | sort -u); do
     path_uniq="${path_uniq//__REPLACED__SPACE__/ }"
 
     pushd "$path_uniq" > /dev/null
-
-    if [[ ! -f "$text_file" ]]; then
-      popd > /dev/null
-      continue
-    fi
-
-    if [[ "$terraform_docs_awk_file" == "0" ]]; then
-      terraform-docs md "$args" ./ > "$tmp_file"
-    else
-      # Can't append extension for mktemp, so renaming instead
-      tmp_file_docs=$(mktemp "${TMPDIR:-/tmp}/terraform-docs-XXXXXXXXXX")
-      mv "$tmp_file_docs" "$tmp_file_docs.tf"
-      tmp_file_docs_tf="$tmp_file_docs.tf"
-
-      awk -f "$terraform_docs_awk_file" ./*.tf > "$tmp_file_docs_tf"
-      terraform-docs md "$args" "$tmp_file_docs_tf" > "$tmp_file"
-      rm -f "$tmp_file_docs_tf"
-    fi
-
-    # Replace content between markers with the placeholder - https://stackoverflow.com/questions/1212799/how-do-i-extract-lines-between-two-line-delimiters-in-perl#1212834
-    perl -i -ne 'if (/BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK/../END OF PRE-COMMIT-TERRAFORM DOCS HOOK/) { print $_ if /BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK/; print "I_WANT_TO_BE_REPLACED\n$_" if /END OF PRE-COMMIT-TERRAFORM DOCS HOOK/;} else { print $_ }' "$text_file"
-
-    # Replace placeholder with the content of the file
-    perl -i -e 'open(F, "'"$tmp_file"'"); $f = join "", <F>; while(<>){if (/I_WANT_TO_BE_REPLACED/) {print $f} else {print $_};}' "$text_file"
-
-    rm -f "$tmp_file"
-
+    tflint $args
     popd > /dev/null
   done
-}
-
-terraform_docs_awk() {
-  readonly output_file=$1
-
-  cat << "EOF" > "$output_file"
-# This script converts Terraform 0.12 variables/outputs to something suitable for `terraform-docs`
-# As of terraform-docs v0.6.0, HCL2 is not supported. This script is a *dirty hack* to get around it.
-# https://github.com/segmentio/terraform-docs/
-# https://github.com/segmentio/terraform-docs/issues/62
-# Script was originally found here: https://github.com/cloudposse/build-harness/blob/master/bin/terraform-docs.awk
-{
-  if ( $0 ~ /\{/ ) {
-    braceCnt++
-  }
-  if ( $0 ~ /\}/ ) {
-    braceCnt--
-  }
-  # ----------------------------------------------------------------------------------------------
-  # variable|output "..." {
-  # ----------------------------------------------------------------------------------------------
-  # [END] variable/output block
-  if (blockCnt > 0 && blockTypeCnt == 0 && blockDefaultCnt == 0) {
-    if (braceCnt == 0 && blockCnt > 0) {
-      blockCnt--
-      print $0
-    }
-  }
-  # [START] variable or output block started
-  if ($0 ~ /^[[:space:]]*(variable|output)[[:space:]][[:space:]]*"(.*?)"/) {
-    # Normalize the braceCnt and block (should be 1 now)
-    braceCnt = 1
-    blockCnt = 1
-    # [CLOSE] "default" and "type" block
-    blockDefaultCnt = 0
-    blockTypeCnt = 0
-    # Print variable|output line
-    print $0
-  }
-  # ----------------------------------------------------------------------------------------------
-  # default = ...
-  # ----------------------------------------------------------------------------------------------
-  # [END] multiline "default" continues/ends
-  if (blockCnt > 0 && blockTypeCnt == 0 && blockDefaultCnt > 0) {
-      print $0
-      # Count opening blocks
-      blockDefaultCnt += gsub(/\(/, "")
-      blockDefaultCnt += gsub(/\[/, "")
-      blockDefaultCnt += gsub(/\{/, "")
-      # Count closing blocks
-      blockDefaultCnt -= gsub(/\)/, "")
-      blockDefaultCnt -= gsub(/\]/, "")
-      blockDefaultCnt -= gsub(/\}/, "")
-  }
-  # [START] multiline "default" statement started
-  if (blockCnt > 0 && blockTypeCnt == 0 && blockDefaultCnt == 0) {
-    if ($0 ~ /^[[:space:]][[:space:]]*(default)[[:space:]][[:space:]]*=/) {
-      if ($3 ~ "null") {
-        print "  default = \"null\""
-      } else {
-        print $0
-        # Count opening blocks
-        blockDefaultCnt += gsub(/\(/, "")
-        blockDefaultCnt += gsub(/\[/, "")
-        blockDefaultCnt += gsub(/\{/, "")
-        # Count closing blocks
-        blockDefaultCnt -= gsub(/\)/, "")
-        blockDefaultCnt -= gsub(/\]/, "")
-        blockDefaultCnt -= gsub(/\}/, "")
-      }
-    }
-  }
-  # ----------------------------------------------------------------------------------------------
-  # type  = ...
-  # ----------------------------------------------------------------------------------------------
-  # [END] multiline "type" continues/ends
-  if (blockCnt > 0 && blockTypeCnt > 0 && blockDefaultCnt == 0) {
-    # The following 'print $0' would print multiline type definitions
-    #print $0
-    # Count opening blocks
-    blockTypeCnt += gsub(/\(/, "")
-    blockTypeCnt += gsub(/\[/, "")
-    blockTypeCnt += gsub(/\{/, "")
-    # Count closing blocks
-    blockTypeCnt -= gsub(/\)/, "")
-    blockTypeCnt -= gsub(/\]/, "")
-    blockTypeCnt -= gsub(/\}/, "")
-  }
-  # [START] multiline "type" statement started
-  if (blockCnt > 0 && blockTypeCnt == 0 && blockDefaultCnt == 0) {
-    if ($0 ~ /^[[:space:]][[:space:]]*(type)[[:space:]][[:space:]]*=/ ) {
-      if ($3 ~ "object") {
-        print "  type = \"object\""
-      } else {
-        # Convert multiline stuff into single line
-        if ($3 ~ /^[[:space:]]*list[[:space:]]*\([[:space:]]*$/) {
-          type = "list"
-        } else if ($3 ~ /^[[:space:]]*string[[:space:]]*\([[:space:]]*$/) {
-          type = "string"
-        } else if ($3 ~ /^[[:space:]]*map[[:space:]]*\([[:space:]]*$/) {
-          type = "map"
-        } else {
-          type = $3
-        }
-        # legacy quoted types: "string", "list", and "map"
-        if (type ~ /^[[:space:]]*"(.*?)"[[:space:]]*$/) {
-          print "  type = " type
-        } else {
-          print "  type = \"" type "\""
-        }
-      }
-      # Count opening blocks
-      blockTypeCnt += gsub(/\(/, "")
-      blockTypeCnt += gsub(/\[/, "")
-      blockTypeCnt += gsub(/\{/, "")
-      # Count closing blocks
-      blockTypeCnt -= gsub(/\)/, "")
-      blockTypeCnt -= gsub(/\]/, "")
-      blockTypeCnt -= gsub(/\}/, "")
-    }
-  }
-  # ----------------------------------------------------------------------------------------------
-  # description = ...
-  # ----------------------------------------------------------------------------------------------
-  # [PRINT] single line "description"
-  if (blockCnt > 0 && blockTypeCnt == 0 && blockDefaultCnt == 0) {
-    if ($0 ~ /^[[:space:]][[:space:]]*description[[:space:]][[:space:]]*=/) {
-      print $0
-    }
-  }
-  # ----------------------------------------------------------------------------------------------
-  # value = ...
-  # ----------------------------------------------------------------------------------------------
-  ## [PRINT] single line "value"
-  #if (blockCnt > 0 && blockTypeCnt == 0 && blockDefaultCnt == 0) {
-  #  if ($0 ~ /^[[:space:]][[:space:]]*value[[:space:]][[:space:]]*=/) {
-  #    print $0
-  #  }
-  #}
-  # ----------------------------------------------------------------------------------------------
-  # Newlines, comments, everything else
-  # ----------------------------------------------------------------------------------------------
-  #if (blockTypeCnt == 0 && blockDefaultCnt == 0) {
-  # Comments with '#'
-  if ($0 ~ /^[[:space:]]*#/) {
-    print $0
-  }
-  # Comments with '//'
-  if ($0 ~ /^[[:space:]]*\/\//) {
-    print $0
-  }
-  # Newlines
-  if ($0 ~ /^[[:space:]]*$/) {
-    print $0
-  }
-  #}
-}
-EOF
-
 }
 
 getopt() {
@@ -749,14 +516,11 @@ getopt() {
 
   _getopt_help() {
     cat <<- EOT >&2
-
 	Usage:
 	 getopt <optstring> <parameters>
 	 getopt [options] [--] <optstring> <parameters>
 	 getopt [options] -o|--options <optstring> [options] [--] <parameters>
-
 	Parse command options.
-
 	Options:
 	 -a, --alternative             allow long options starting with single -
 	 -l, --longoptions <longopts>  the long options to be recognized
@@ -767,10 +531,8 @@ getopt() {
 	 -s, --shell <shell>           set quoting conventions to those of <shell>
 	 -T, --test                    test for getopt(1) version
 	 -u, --unquoted                do not quote the output
-
 	 -h, --help     display this help and exit
 	 -V, --version  output version information and exit
-
 	For more details see getopt(1).
 	EOT
   }
